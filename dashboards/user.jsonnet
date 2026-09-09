@@ -186,17 +186,30 @@ local userSessions =
   + stateTimeline.queryOptions.withTargets([
     prometheus.new(
       '$PROMETHEUS_DS',
+      // The state timeline right-aligns and clips long y-axis labels on the
+      // left (it does not auto-ellipsize like the time series panels), so long
+      // usernames such as email addresses become unreadable. We build a
+      // shortened `user_disp` label: names longer than 15 characters are shown
+      // as the first 10 + ".." + last 3 (e.g. "jadeanasta..com"), preserving
+      // both ends; shorter names are shown in full. The full username remains
+      // available on the series for tooltips.
       |||
-        max by (annotation_hub_jupyter_org_username, namespace) (
-          (kube_pod_status_phase{namespace=~"$hub_name", phase="Running", pod=~"jupyter-.*"} == 1)
-          * on (namespace, pod) group_left(annotation_hub_jupyter_org_username)
-          group(
-            kube_pod_annotations{namespace=~"$hub_name", annotation_hub_jupyter_org_username=~"$user_name", pod=~"jupyter-.*"}
-          ) by (namespace, pod, annotation_hub_jupyter_org_username)
+        label_replace(
+          label_replace(
+            max by (annotation_hub_jupyter_org_username, namespace) (
+              (kube_pod_status_phase{namespace=~"$hub_name", phase="Running", pod=~"jupyter-.*"} == 1)
+              * on (namespace, pod) group_left(annotation_hub_jupyter_org_username)
+              group(
+                kube_pod_annotations{namespace=~"$hub_name", annotation_hub_jupyter_org_username=~"$user_name", pod=~"jupyter-.*"}
+              ) by (namespace, pod, annotation_hub_jupyter_org_username)
+            ),
+            "user_disp", "$1..$2", "annotation_hub_jupyter_org_username", "(.{10}).*(.{3})"
+          ),
+          "user_disp", "$1", "annotation_hub_jupyter_org_username", "(^.{0,15})$"
         )
       |||
     )
-    + prometheus.withLegendFormat('{{ annotation_hub_jupyter_org_username }}'),
+    + prometheus.withLegendFormat('{{ user_disp }}'),
   ])
   + stateTimeline.options.withMergeValues(true)
   + stateTimeline.options.withShowValue('never')
