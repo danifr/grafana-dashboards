@@ -196,7 +196,7 @@ local userSessions =
         )
       |||
     )
-    + prometheus.withLegendFormat('{{ annotation_hub_jupyter_org_username }} - ({{ namespace }})'),
+    + prometheus.withLegendFormat('{{ annotation_hub_jupyter_org_username }}'),
   ])
   + stateTimeline.options.withMergeValues(true)
   + stateTimeline.options.withShowValue('never')
