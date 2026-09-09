@@ -2,6 +2,7 @@
 local grafonnet = import 'github.com/grafana/grafonnet/gen/grafonnet-v11.1.0/main.libsonnet';
 local dashboard = grafonnet.dashboard;
 local ts = grafonnet.panel.timeSeries;
+local stateTimeline = grafonnet.panel.stateTimeline;
 local prometheus = grafonnet.query.prometheus;
 
 local common = import './common.libsonnet';
@@ -166,6 +167,67 @@ local cpuRequests =
     + prometheus.withLegendFormat('{{ annotation_hub_jupyter_org_username }} - ({{ namespace }})'),
   ]);
 
+local userSessions =
+  stateTimeline.new('User Sessions')
+  + stateTimeline.panelOptions.withDescription(
+    |||
+      When each user's notebook server was running, over the selected time range.
+
+      Each row is a user; a colored segment marks the periods their singleuser
+      server pod was in the `Running` phase. The width of a segment is how long
+      that server ran, and its position shows when it started and stopped.
+
+      This is based on `kube_pod_status_phase{phase="Running"}` for `jupyter-*`
+      pods, joined to the hub username annotation, so it reflects servers that
+      were actually running (consistent with the CPU/Memory panels) rather than
+      pods that merely still exist in a completed state.
+    |||
+  )
+  + stateTimeline.queryOptions.withTargets([
+    prometheus.new(
+      '$PROMETHEUS_DS',
+      |||
+        max by (annotation_hub_jupyter_org_username, namespace) (
+          (kube_pod_status_phase{namespace=~"$hub_name", phase="Running", pod=~"jupyter-.*"} == 1)
+          * on (namespace, pod) group_left(annotation_hub_jupyter_org_username)
+          group(
+            kube_pod_annotations{namespace=~"$hub_name", annotation_hub_jupyter_org_username=~"$user_name", pod=~"jupyter-.*"}
+          ) by (namespace, pod, annotation_hub_jupyter_org_username)
+        )
+      |||
+    )
+    + prometheus.withLegendFormat('{{ annotation_hub_jupyter_org_username }} - ({{ namespace }})'),
+  ])
+  + stateTimeline.options.withMergeValues(true)
+  + stateTimeline.options.withShowValue('never')
+  + stateTimeline.options.withAlignValue('left')
+  + stateTimeline.options.withRowHeight(0.9)
+  + stateTimeline.options.tooltip.withMode('single')
+  + stateTimeline.standardOptions.withDecimals(0)
+  + stateTimeline.fieldConfig.defaults.custom.withFillOpacity(100)
+  + stateTimeline.fieldConfig.defaults.custom.withLineWidth(0)
+  + {
+    fieldConfig+: {
+      defaults+: {
+        // one distinct color per user row
+        color: { mode: 'palette-classic-by-name' },
+      },
+    },
+    options+: {
+      // the y-axis already labels each row with the user
+      legend: { showLegend: false },
+    },
+  };
+
+// A fixed Y-axis width applied to every panel so their plot areas start at the
+// same horizontal offset and the time (x) axes line up across panels. The
+// "User Sessions" panel has a text (username) y-axis while the resource panels
+// have numeric axes of a different width, so without this they do not align.
+local axisWidth = 140;
+local withFixedAxisWidth(panel) = panel {
+  fieldConfig+: { defaults+: { custom+: { axisWidth: axisWidth } } },
+};
+
 dashboard.new('User Diagnostics Dashboard')
 + dashboard.withTags(['jupyterhub'])
 + dashboard.withUid('user-diagnostics-dashboard')
@@ -177,13 +239,14 @@ dashboard.new('User Diagnostics Dashboard')
 ])
 + dashboard.withPanels(
   grafonnet.util.grid.makeGrid(
-    [
+    std.map(withFixedAxisWidth, [
+      userSessions,
       memoryUsage,
       cpuUsage,
       homedirSharedUsage,
       memoryRequests,
       cpuRequests,
-    ],
+    ]),
     panelWidth=24,
     panelHeight=12,
   )
